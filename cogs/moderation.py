@@ -17,6 +17,35 @@ class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def cog_load(self) -> None:
+        """
+        Optional: auto-sync slash commands so newly added ones actually appear.
+        Configure with:
+          bot.config["discord"]["sync_app_commands"] = True
+          bot.config["discord"]["sync_guild_ids"] = [123, 456]   # optional (faster than global)
+        """
+        cfg = getattr(self.bot, "config", {}) or {}
+        discord_cfg = cfg.get("discord", {}) if isinstance(cfg, dict) else {}
+        if not isinstance(discord_cfg, dict) or not discord_cfg.get("sync_app_commands"):
+            return
+
+        guild_ids = discord_cfg.get("sync_guild_ids")
+        try:
+            if isinstance(guild_ids, (list, tuple)) and guild_ids:
+                for gid in guild_ids:
+                    await self.bot.tree.sync(guild=discord.Object(id=int(gid)))
+            else:
+                await self.bot.tree.sync()
+        except Exception:
+            # avoid blocking cog load if sync fails (rate limits / perms / transient errors)
+            pass
+
+    async def _respond(self, interaction: discord.Interaction, *, content: str | None = None,
+                       embed: discord.Embed | None = None, ephemeral: bool = False, view=None):
+        """Send via initial response if possible, else via followup (prevents InteractionResponded issues)."""
+        send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+        return await send(content=content, embed=embed, ephemeral=ephemeral, view=view)
+
     async def _post_modlog(self, guild: discord.Guild, embed: discord.Embed):
         settings = await self.bot.db.get_server_settings(guild.id)
         channel_id = settings.get("log_channel")
@@ -219,9 +248,19 @@ class Moderation(commands.Cog):
         except Exception:
             pass
 
-        # Auto action
-        warn_threshold = self.bot.config["moderation"]["warn_threshold"]
-        auto_action = self.bot.config["moderation"]["warn_threshold_action"]
+        # Auto action (harden config access so missing keys don't crash the command)
+        mod_cfg = (getattr(self.bot, "config", {}) or {}).get("moderation", {})
+        if not isinstance(mod_cfg, dict):
+            mod_cfg = {}
+
+        try:
+            warn_threshold = int(mod_cfg.get("warn_threshold", 0))
+        except Exception:
+            warn_threshold = 0
+
+        auto_action = str(mod_cfg.get("warn_threshold_action", "none")).lower()
+        if warn_threshold <= 0 or auto_action == "none":
+            return
 
         if warning_count >= warn_threshold and auto_action != "none":
             if auto_action == "timeout":
@@ -377,9 +416,15 @@ class Moderation(commands.Cog):
     @timeout.error
     @untimeout.error
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        # unwrap common wrapper so you see the real exception
+        if isinstance(error, app_commands.CommandInvokeError) and getattr(error, "original", None):
+            error = error.original  # type: ignore[assignment]
+
         if isinstance(error, app_commands.MissingPermissions):
-            return await interaction.response.send_message("❌ You don’t have permission to use this command.", ephemeral=True)
-        await interaction.response.send_message(f"❌ Error: {error}", ephemeral=True)
+            return await self._respond(interaction, content="❌ You don’t have permission to use this command.", ephemeral=True)
+
+        # If you were already responded/deferred in a command, use followup safely
+        return await self._respond(interaction, content=f"❌ Error: {error}", ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
