@@ -4,6 +4,7 @@ Handles message purging and message utilities
 """
 from __future__ import annotations
 
+import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -195,13 +196,19 @@ class ModGroup(app_commands.Group):
                 ephemeral=True,
             )
             if interaction.guild:
-                await self.bot.db.log_action(
-                    interaction.guild.id,
-                    "purge",
-                    interaction.user.id,
-                    interaction.user.id,
-                    f"Purged {len(deleted)} messages (slash)",
-                )
+                try:
+                    await asyncio.wait_for(
+                        self.bot.db.log_action(
+                            interaction.guild.id,
+                            "purge",
+                            interaction.user.id,
+                            interaction.user.id,
+                            f"Purged {len(deleted)} messages (slash)",
+                        ),
+                        timeout=5.0,
+                    )
+                except Exception:
+                    pass
         except discord.Forbidden:
             await interaction.followup.send(
                 embed=create_error_embed("I don't have permission to delete messages here."),

@@ -2,6 +2,7 @@
 Welcome Cog
 Posts a welcome message when a member joins.
 """
+import asyncio
 import discord
 from discord.ext import commands
 
@@ -13,7 +14,7 @@ class Welcome(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
         try:
-            settings = await self.bot.db.get_server_settings(member.guild.id)
+            settings = await asyncio.wait_for(self.bot.db.get_server_settings(member.guild.id), timeout=5.0)
             channel_id = settings.get("welcome_channel")
             if not channel_id:
                 return

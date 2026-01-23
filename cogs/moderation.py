@@ -61,7 +61,10 @@ class Moderation(commands.Cog):
         return await send(content=content, embed=embed, ephemeral=ephemeral, view=view)
 
     async def _post_modlog(self, guild: discord.Guild, embed: discord.Embed):
-        settings = await self.bot.db.get_server_settings(guild.id)
+        try:
+            settings = await self._db_call(self.bot.db.get_server_settings(guild.id), timeout=5.0)
+        except Exception:
+            return
         channel_id = settings.get("log_channel")
         if not channel_id:
             return
@@ -92,7 +95,10 @@ class Moderation(commands.Cog):
 
         try:
             await member.kick(reason=f"{reason} | Kicked by {author} ({author.id})")
-            await self.bot.db.log_action(interaction.guild.id, "kick", member.id, author.id, reason)
+            try:
+                await self._db_call(self.bot.db.log_action(interaction.guild.id, "kick", member.id, author.id, reason))
+            except Exception:
+                pass
 
             embed = discord.Embed(
                 title="Member Kicked",
@@ -143,7 +149,10 @@ class Moderation(commands.Cog):
 
         try:
             await member.ban(reason=f"{reason} | Banned by {author} ({author.id})")
-            await self.bot.db.log_action(interaction.guild.id, "ban", member.id, author.id, reason)
+            try:
+                await self._db_call(self.bot.db.log_action(interaction.guild.id, "ban", member.id, author.id, reason))
+            except Exception:
+                pass
 
             embed = discord.Embed(
                 title="Member Banned",
@@ -188,7 +197,10 @@ class Moderation(commands.Cog):
         try:
             user = await self.bot.fetch_user(uid)
             await interaction.guild.unban(user)
-            await self.bot.db.log_action(interaction.guild.id, "unban", user.id, author.id, None)
+            try:
+                await self._db_call(self.bot.db.log_action(interaction.guild.id, "unban", user.id, author.id, None))
+            except Exception:
+                pass
 
             embed = discord.Embed(
                 title="User Unbanned",
@@ -219,10 +231,16 @@ class Moderation(commands.Cog):
 
         await self._defer(interaction, ephemeral=True)
 
-        await self.bot.db.add_warning(interaction.guild.id, member.id, author.id, reason)
-        await self.bot.db.log_action(interaction.guild.id, "warn", member.id, author.id, reason)
+        try:
+            await self._db_call(self.bot.db.add_warning(interaction.guild.id, member.id, author.id, reason))
+            await self._db_call(self.bot.db.log_action(interaction.guild.id, "warn", member.id, author.id, reason))
+        except asyncio.TimeoutError:
+            return await self._respond(interaction, embed=create_error_embed("DB timed out while saving the warning. Try again."), ephemeral=True)
 
-        warning_count = await self.bot.db.get_warning_count(interaction.guild.id, member.id)
+        try:
+            warning_count = await self._db_call(self.bot.db.get_warning_count(interaction.guild.id, member.id))
+        except asyncio.TimeoutError:
+            warning_count = 0
 
         embed = discord.Embed(
             title="Member Warned",
@@ -367,7 +385,10 @@ class Moderation(commands.Cog):
 
         try:
             await member.timeout(timedelta(minutes=duration), reason=f"{reason} | Timed out by {author} ({author.id})")
-            await self.bot.db.log_action(interaction.guild.id, "timeout", member.id, author.id, reason)
+            try:
+                await self._db_call(self.bot.db.log_action(interaction.guild.id, "timeout", member.id, author.id, reason))
+            except Exception:
+                pass
 
             embed = discord.Embed(
                 title="Member Timed Out",
@@ -398,7 +419,10 @@ class Moderation(commands.Cog):
 
         try:
             await member.timeout(None, reason=f"Timeout removed by {author} ({author.id})")
-            await self.bot.db.log_action(interaction.guild.id, "untimeout", member.id, author.id, None)
+            try:
+                await self._db_call(self.bot.db.log_action(interaction.guild.id, "untimeout", member.id, author.id, None))
+            except Exception:
+                pass
 
             embed = discord.Embed(
                 title="Timeout Removed",
@@ -435,7 +459,10 @@ class Moderation(commands.Cog):
 
         await self._defer(interaction, ephemeral=True)
 
-        warnings = await self.bot.db.get_warnings(interaction.guild.id, member.id)
+        try:
+            warnings = await self._db_call(self.bot.db.get_warnings(interaction.guild.id, member.id))
+        except asyncio.TimeoutError:
+            return await self._respond(interaction, embed=create_error_embed("DB timed out while fetching warnings. Try again."), ephemeral=True)
         if not warnings:
             return await self._respond(interaction, embed=create_error_embed("That member has no warnings."), ephemeral=True)
 
@@ -454,8 +481,15 @@ class Moderation(commands.Cog):
                 ephemeral=True,
             )
 
-        new_count = await self.bot.db.get_warning_count(interaction.guild.id, member.id)
-        await self.bot.db.log_action(interaction.guild.id, "unwarn", member.id, interaction.user.id, "Removed latest warning")
+        try:
+            new_count = await self._db_call(self.bot.db.get_warning_count(interaction.guild.id, member.id))
+        except asyncio.TimeoutError:
+            new_count = 0
+
+        try:
+            await self._db_call(self.bot.db.log_action(interaction.guild.id, "unwarn", member.id, interaction.user.id, "Removed latest warning"))
+        except Exception:
+            pass
         await self._respond(interaction, embed=create_success_embed(f"Removed 1 warning from {member.mention}. Now: {new_count}."), ephemeral=True)
 
     # ---------- FEATURES ----------
@@ -521,13 +555,18 @@ class Moderation(commands.Cog):
                 embed=create_success_embed(f"Deleted **{len(deleted)}** messages."),
                 ephemeral=True,
             )
-            await self.bot.db.log_action(
-                interaction.guild.id,
-                "purge",
-                interaction.user.id,
-                interaction.user.id,
-                f"Purged {len(deleted)} messages",
-            )
+            try:
+                await self._db_call(
+                    self.bot.db.log_action(
+                        interaction.guild.id,
+                        "purge",
+                        interaction.user.id,
+                        interaction.user.id,
+                        f"Purged {len(deleted)} messages",
+                    )
+                )
+            except Exception:
+                pass
         except discord.Forbidden:
             await interaction.followup.send(embed=create_error_embed("I don't have permission to delete messages here."), ephemeral=True)
         except discord.HTTPException:

@@ -9,6 +9,7 @@ import logging
 import yaml
 import discord
 from discord.ext import commands
+from discord import app_commands
 from dotenv import load_dotenv
 
 from database.db_manager import DatabaseManager
@@ -93,6 +94,53 @@ class ModBot(commands.Bot):
             logger.info(f"✅ Globally synced {len(synced_global)} slash commands")
         except Exception:
             logger.exception("❌ Global sync failed")
+
+        # Global slash-command error handler: prevents "Bot is thinking..." with no followup.
+        self.tree.on_error = self._on_app_command_error
+
+    async def _safe_interaction_send(
+        self,
+        interaction: discord.Interaction,
+        *,
+        content: str | None = None,
+        embed: discord.Embed | None = None,
+        ephemeral: bool = True,
+    ):
+        send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+        return await send(content=content, embed=embed, ephemeral=ephemeral)
+
+    async def _on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        # Log full traceback server-side
+        logger.exception("App command error", exc_info=error)
+
+        # Unwrap common wrapper so message is useful
+        if isinstance(error, app_commands.CommandInvokeError) and getattr(error, "original", None):
+            error = error.original  # type: ignore[assignment]
+
+        try:
+            if isinstance(error, app_commands.MissingPermissions):
+                return await self._safe_interaction_send(
+                    interaction,
+                    content="❌ You don’t have permission to use this command.",
+                    ephemeral=True,
+                )
+
+            if isinstance(error, app_commands.CheckFailure):
+                return await self._safe_interaction_send(
+                    interaction,
+                    content="❌ You can’t use this command here.",
+                    ephemeral=True,
+                )
+
+            # Generic fallback
+            return await self._safe_interaction_send(
+                interaction,
+                content=f"❌ Error: {error}",
+                ephemeral=True,
+            )
+        except Exception:
+            # If responding fails (e.g., interaction expired), swallow.
+            return
 
     async def on_ready(self):
         logger.info(f"Logged in as {self.user} (ID: {self.user.id})")

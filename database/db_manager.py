@@ -2,6 +2,7 @@
 
 import aiosqlite
 import json
+import asyncio
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
@@ -18,6 +19,10 @@ class DatabaseManager:
         self.db_path = db_path
         self.db: Optional[aiosqlite.Connection] = None
 
+        # Default timeouts: keep the bot responsive if SQLite is busy/locked.
+        self._connect_timeout_s: float = 5.0
+        self._busy_timeout_ms: int = 5000
+
     async def init_db(self) -> None:
         """
         Backward-compatible initializer used by cogs.
@@ -28,9 +33,20 @@ class DatabaseManager:
     async def connect(self) -> None:
         """Establish database connection and create tables."""
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        
-        self.db = await aiosqlite.connect(self.db_path)
+
+        self.db = await aiosqlite.connect(self.db_path, timeout=self._connect_timeout_s)
         self.db.row_factory = aiosqlite.Row
+
+        # Pragmas to reduce lock contention and avoid indefinite waits.
+        try:
+            await self.db.execute("PRAGMA journal_mode=WAL;")
+            await self.db.execute("PRAGMA synchronous=NORMAL;")
+            await self.db.execute(f"PRAGMA busy_timeout={int(self._busy_timeout_ms)};")
+            await self.db.execute("PRAGMA foreign_keys=ON;")
+        except Exception:
+            # If pragmas fail, continue with defaults.
+            pass
+
         await self._create_tables()
         
     async def close(self) -> None:

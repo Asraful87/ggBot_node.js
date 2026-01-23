@@ -2,6 +2,7 @@
 Setup Cog (SLASH COMMANDS)
 Handles server configuration
 """
+import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -27,7 +28,14 @@ class SetupCog(commands.Cog):
     @app_commands.guild_only()
     async def setup_logchannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         await self._defer(interaction, ephemeral=True)
-        await self.bot.db.update_server_setting(interaction.guild.id, "log_channel", channel.id)
+        try:
+            await asyncio.wait_for(
+                self.bot.db.update_server_setting(interaction.guild.id, "log_channel", channel.id),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            return await interaction.followup.send(embed=create_error_embed("DB timed out saving this setting. Try again."), ephemeral=True)
+
         await interaction.followup.send(embed=create_success_embed(f"Mod log channel set to {channel.mention}!"), ephemeral=True)
 
     @setup.command(name="welcomechannel", description="Set the welcome channel.")
@@ -35,7 +43,14 @@ class SetupCog(commands.Cog):
     @app_commands.guild_only()
     async def setup_welcomechannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         await self._defer(interaction, ephemeral=True)
-        await self.bot.db.update_server_setting(interaction.guild.id, "welcome_channel", channel.id)
+        try:
+            await asyncio.wait_for(
+                self.bot.db.update_server_setting(interaction.guild.id, "welcome_channel", channel.id),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            return await interaction.followup.send(embed=create_error_embed("DB timed out saving this setting. Try again."), ephemeral=True)
+
         await interaction.followup.send(embed=create_success_embed(f"Welcome channel set to {channel.mention}!"), ephemeral=True)
 
     @setup.command(name="config", description="View current server configuration.")
@@ -43,7 +58,10 @@ class SetupCog(commands.Cog):
     @app_commands.guild_only()
     async def setup_config(self, interaction: discord.Interaction):
         await self._defer(interaction, ephemeral=True)
-        settings = await self.bot.db.get_server_settings(interaction.guild.id)
+        try:
+            settings = await asyncio.wait_for(self.bot.db.get_server_settings(interaction.guild.id), timeout=5.0)
+        except asyncio.TimeoutError:
+            return await interaction.followup.send(embed=create_error_embed("DB timed out loading server config. Try again."), ephemeral=True)
 
         log_channel = interaction.guild.get_channel(settings.get("log_channel")) if settings.get("log_channel") else None
         welcome_channel = interaction.guild.get_channel(settings.get("welcome_channel")) if settings.get("welcome_channel") else None
