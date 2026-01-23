@@ -9,7 +9,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from datetime import timedelta
-from utils.embeds import create_error_embed
+from utils.embeds import create_error_embed, create_success_embed
 from utils.confirmations import ConfirmView
 
 
@@ -406,6 +406,81 @@ class Moderation(commands.Cog):
         except discord.Forbidden:
             await interaction.response.send_message(embed=create_error_embed("I don't have permission to remove timeout."), ephemeral=True)
 
+    # ---------- FEATURES ----------
+    @app_commands.command(name="features", description="List available moderation features in this bot.")
+    @app_commands.guild_only()
+    async def features(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="Bot Features (loaded from this cog)",
+            color=discord.Color.blurple(),
+            description=(
+                "**Moderation (slash):**\n"
+                "- /kick (role checks, DB log, optional modlog)\n"
+                "- /ban (confirmation UI, DB log, optional modlog)\n"
+                "- /unban (by user ID/mention, DB log, optional modlog)\n"
+                "- /warn (stores warnings, DB log, DM attempt, optional threshold auto-action)\n"
+                "- /warnings (view warnings)\n"
+                "- /clearwarnings (admin-only)\n"
+                "- /timeout, /untimeout (DB log, optional modlog)\n\n"
+                "**Operational:**\n"
+                "- Optional slash command sync on cog load (config-driven)\n"
+                "- Shared app-command error handler (safe followups)\n"
+                "- Modlog posting to configured log channel\n"
+            ),
+        )
+        await self._respond(interaction, embed=embed, ephemeral=True)
+
+    # ---------- PURGE ----------
+    @app_commands.command(name="purge", description="Delete messages in bulk (custom amount).")
+    @app_commands.checks.has_permissions(manage_messages=True)
+    @app_commands.guild_only()
+    async def purge(self, interaction: discord.Interaction, amount: app_commands.Range[int, 1, 500]):
+        if not interaction.guild:
+            return await self._respond(interaction, content="❌ This command can only be used in a server.", ephemeral=True)
+
+        # Respect optional configured max (defaults to 100)
+        mod_cfg = (getattr(self.bot, "config", {}) or {}).get("moderation", {})
+        if not isinstance(mod_cfg, dict):
+            mod_cfg = {}
+        try:
+            max_amount = int(mod_cfg.get("max_purge_amount", 100))
+        except Exception:
+            max_amount = 100
+
+        if amount > max_amount:
+            return await self._respond(
+                interaction,
+                embed=create_error_embed(f"Max purge amount is {max_amount}."),
+                ephemeral=True,
+            )
+
+        await interaction.response.defer(ephemeral=True)
+
+        channel = interaction.channel
+        if channel is None or not hasattr(channel, "purge"):
+            return await interaction.followup.send(
+                embed=create_error_embed("This command can only be used in a text-based channel."),
+                ephemeral=True,
+            )
+
+        try:
+            deleted = await channel.purge(limit=amount)
+            await interaction.followup.send(
+                embed=create_success_embed(f"Deleted **{len(deleted)}** messages."),
+                ephemeral=True,
+            )
+            await self.bot.db.log_action(
+                interaction.guild.id,
+                "purge",
+                interaction.user.id,
+                interaction.user.id,
+                f"Purged {len(deleted)} messages",
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(embed=create_error_embed("I don't have permission to delete messages here."), ephemeral=True)
+        except discord.HTTPException:
+            await interaction.followup.send(embed=create_error_embed("Failed to delete messages. Messages might be too old."), ephemeral=True)
+
     # ---------- Error handling for this cog ----------
     @kick.error
     @ban.error
@@ -415,6 +490,8 @@ class Moderation(commands.Cog):
     @clearwarnings.error
     @timeout.error
     @untimeout.error
+    @features.error
+    @purge.error
     async def on_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         # unwrap common wrapper so you see the real exception
         if isinstance(error, app_commands.CommandInvokeError) and getattr(error, "original", None):
