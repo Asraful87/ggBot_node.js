@@ -5,6 +5,7 @@ Handles kick, ban, warn, timeout, and other moderation commands
 
 from __future__ import annotations
 
+import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -16,6 +17,10 @@ from utils.confirmations import ConfirmView
 class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    async def _db_call(self, coro, *, timeout: float = 10.0):
+        """Run a DB coroutine with a timeout to avoid interactions hanging forever."""
+        return await asyncio.wait_for(coro, timeout=timeout)
 
     async def _defer(self, interaction: discord.Interaction, *, ephemeral: bool = True) -> None:
         """Defer safely to avoid 'This interaction failed' on slow operations."""
@@ -295,12 +300,17 @@ class Moderation(commands.Cog):
     @app_commands.guild_only()
     async def warnings(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.guild:
-            return await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
+            return await self._respond(interaction, content="❌ This command can only be used in a server.", ephemeral=True)
 
-        warnings = await self.bot.db.get_warnings(interaction.guild.id, member.id)
+        await self._defer(interaction, ephemeral=True)
+
+        try:
+            warnings = await self._db_call(self.bot.db.get_warnings(interaction.guild.id, member.id))
+        except asyncio.TimeoutError:
+            return await self._respond(interaction, embed=create_error_embed("DB timed out while fetching warnings. Try again."), ephemeral=True)
 
         if not warnings:
-            return await interaction.response.send_message(f"{member.mention} has no warnings.", ephemeral=True)
+            return await self._respond(interaction, content=f"{member.mention} has no warnings.", ephemeral=True)
 
         embed = discord.Embed(
             title=f"Warnings for {member}",
@@ -322,7 +332,7 @@ class Moderation(commands.Cog):
                 inline=False,
             )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await self._respond(interaction, embed=embed, ephemeral=True)
 
     # ---------- CLEAR WARNINGS ----------
     @app_commands.command(name="clearwarnings", description="Clear all warnings for a member.")
@@ -330,10 +340,15 @@ class Moderation(commands.Cog):
     @app_commands.guild_only()
     async def clearwarnings(self, interaction: discord.Interaction, member: discord.Member):
         if not interaction.guild:
-            return await interaction.response.send_message("❌ This command can only be used in a server.", ephemeral=True)
+            return await self._respond(interaction, content="❌ This command can only be used in a server.", ephemeral=True)
 
-        cleared = await self.bot.db.clear_warnings(interaction.guild.id, member.id)
-        await interaction.response.send_message(f"✅ Cleared {cleared} warning(s) for {member.mention}.", ephemeral=True)
+        await self._defer(interaction, ephemeral=True)
+        try:
+            cleared = await self._db_call(self.bot.db.clear_warnings(interaction.guild.id, member.id))
+        except asyncio.TimeoutError:
+            return await self._respond(interaction, embed=create_error_embed("DB timed out while clearing warnings. Try again."), ephemeral=True)
+
+        await self._respond(interaction, content=f"✅ Cleared {cleared} warning(s) for {member.mention}.", ephemeral=True)
 
     # ---------- TIMEOUT ----------
     @app_commands.command(name="timeout", description="Timeout a member (duration in minutes).")
