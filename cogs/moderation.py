@@ -17,6 +17,18 @@ class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    async def _post_modlog(self, guild: discord.Guild, embed: discord.Embed):
+        settings = await self.bot.db.get_server_settings(guild.id)
+        channel_id = settings.get("log_channel")
+        if not channel_id:
+            return
+        channel = guild.get_channel(channel_id)
+        if channel:
+            try:
+                await channel.send(embed=embed)
+            except Exception:
+                pass
+
     # ---------- KICK ----------
     @app_commands.command(name="kick", description="Kick a member from the server.")
     @app_commands.checks.has_permissions(kick_members=True)
@@ -51,6 +63,8 @@ class Moderation(commands.Cog):
                 color=discord.Color.orange(),
             )
             await interaction.response.send_message(embed=embed)
+            await self._post_modlog(interaction.guild, embed)
+
         except discord.Forbidden:
             await interaction.response.send_message(embed=create_error_embed("I don't have permission to kick this member."), ephemeral=True)
 
@@ -111,6 +125,9 @@ class Moderation(commands.Cog):
                 await msg.edit(content=None, embed=embed, view=None)
             else:
                 await interaction.followup.send(embed=embed, ephemeral=True)
+
+            await self._post_modlog(interaction.guild, embed)
+
         except discord.Forbidden:
             if msg:
                 await msg.edit(content="❌ I don't have permission to ban this member.", view=None)
@@ -145,6 +162,8 @@ class Moderation(commands.Cog):
                 color=discord.Color.green(),
             )
             await interaction.response.send_message(embed=embed)
+            await self._post_modlog(interaction.guild, embed)
+
         except discord.NotFound:
             await interaction.response.send_message(embed=create_error_embed("User not found or not banned."), ephemeral=True)
         except discord.Forbidden:
@@ -174,7 +193,6 @@ class Moderation(commands.Cog):
         await self.bot.db.add_warning(interaction.guild.id, member.id, author.id, reason)
         await self.bot.db.log_action(interaction.guild.id, "warn", member.id, author.id, reason)
 
-        # ✅ better than len(get_warnings()) (in case you ever limit results later)
         warning_count = await self.bot.db.get_warning_count(interaction.guild.id, member.id)
 
         embed = discord.Embed(
@@ -188,6 +206,7 @@ class Moderation(commands.Cog):
             color=discord.Color.orange(),
         )
         await interaction.response.send_message(embed=embed)
+        await self._post_modlog(interaction.guild, embed)
 
         # Try DM
         try:
@@ -255,7 +274,6 @@ class Moderation(commands.Cog):
             color=discord.Color.orange(),
         )
 
-        # ✅ DB uses mod_id, not moderator_id
         for i, warning in enumerate(warnings[:10], 1):
             mod_id = warning.get("mod_id")
             mod_name = f"<@{mod_id}>" if mod_id else "Unknown"
@@ -319,6 +337,8 @@ class Moderation(commands.Cog):
                 color=discord.Color.orange(),
             )
             await interaction.response.send_message(embed=embed)
+            await self._post_modlog(interaction.guild, embed)
+
         except discord.Forbidden:
             await interaction.response.send_message(embed=create_error_embed("I don't have permission to timeout this member."), ephemeral=True)
 
@@ -342,6 +362,8 @@ class Moderation(commands.Cog):
                 color=discord.Color.green(),
             )
             await interaction.response.send_message(embed=embed)
+            await self._post_modlog(interaction.guild, embed)
+
         except discord.Forbidden:
             await interaction.response.send_message(embed=create_error_embed("I don't have permission to remove timeout."), ephemeral=True)
 
