@@ -50,6 +50,9 @@ class ModBot(commands.Bot):
             "cogs.setup",
             "cogs.verification",
             "cogs.tickets",
+            "cogs.antiraid",
+            "cogs.automod",
+            "cogs.Welcome",
         ]
 
         for cog in cogs:
@@ -83,7 +86,7 @@ async def main():
     async with bot:
         token = os.getenv("DISCORD_TOKEN")
         if not token:
-            raise RuntimeError("DISCORD_TOKEN is not seti. Add it to your .env file (DISCORD_TOKEN=...).")
+            raise RuntimeError("DISCORD_TOKEN is not set. Add it to your .env file (DISCORD_TOKEN=...).")
 
         try:
             await bot.start(token)
@@ -94,3 +97,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+intents = discord.Intents.default()
+intents.message_content = True   # REQUIRED for keyword spam
+intents.members = True
+intents.guilds = True

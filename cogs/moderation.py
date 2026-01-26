@@ -105,12 +105,12 @@ class Moderation(commands.Cog):
                 description=f"{member.mention} has been kicked.\n**Moderator:** {author.mention}\n**Reason:** {reason}",
                 color=discord.Color.orange(),
             )
-            await self._respond(interaction, embed=embed, ephemeral=False)
+            await interaction.followup.send(embed=embed, ephemeral=False)
             await self._post_modlog(interaction.guild, embed)
         except discord.Forbidden:
-            await self._respond(interaction, embed=create_error_embed("I don't have permission to kick this member."), ephemeral=True)
+            await interaction.followup.send(embed=create_error_embed("I don't have permission to kick this member."), ephemeral=True)
         except discord.HTTPException:
-            await self._respond(interaction, embed=create_error_embed("Kick failed due to a Discord API error."), ephemeral=True)
+            await interaction.followup.send(embed=create_error_embed("Kick failed due to a Discord API error."), ephemeral=True)
 
     # ---------- BAN ----------
     @app_commands.command(name="ban", description="Ban a member from the server (with confirmation).")
@@ -429,12 +429,12 @@ class Moderation(commands.Cog):
                 description=f"Timeout removed from {member.mention}.\n**Moderator:** {author.mention}",
                 color=discord.Color.green(),
             )
-            await self._respond(interaction, embed=embed, ephemeral=False)
+            await interaction.followup.send(embed=embed, ephemeral=False)
             await self._post_modlog(interaction.guild, embed)
         except discord.Forbidden:
-            await self._respond(interaction, embed=create_error_embed("I don't have permission to remove timeout."), ephemeral=True)
+            await interaction.followup.send(embed=create_error_embed("I don't have permission to remove timeout."), ephemeral=True)
         except discord.HTTPException:
-            await self._respond(interaction, embed=create_error_embed("Untimeout failed due to a Discord API error."), ephemeral=True)
+            await interaction.followup.send(embed=create_error_embed("Untimeout failed due to a Discord API error."), ephemeral=True)
 
     # ---------- MUTE / UNMUTE (aliases for timeout) ----------
     @app_commands.command(name="mute", description="Mute a member (alias for timeout; duration in minutes).")
