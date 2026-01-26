@@ -83,7 +83,7 @@ async def main():
     async with bot:
         token = os.getenv("DISCORD_TOKEN")
         if not token:
-            raise RuntimeError("DISCORD_TOKEN is not set. Add it to your .env file (DISCORD_TOKEN=...).")
+            raise RuntimeError("DISCORD_TOKEN is not seti. Add it to your .env file (DISCORD_TOKEN=...).")
 
         try:
             await bot.start(token)
