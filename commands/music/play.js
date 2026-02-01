@@ -69,7 +69,7 @@ async function searchYouTube(query) {
 async function playSong(guild, queue) {
     if (queue.songs.length === 0) {
         queue.current = null;
-        return;
+        return false;
     }
 
     const song = queue.songs.shift();
@@ -81,13 +81,30 @@ async function playSong(guild, queue) {
             throw new Error(`Invalid song URL: ${song.url}`);
         }
 
-        // Use ytdl-core for streaming (more robust than play-dl stream)
-        const audioStream = ytdl(song.url, {
-            filter: 'audioonly',
-            quality: 'highestaudio',
-            highWaterMark: 1 << 25,
-            liveBuffer: 1 << 25
-        });
+        // Primary: ytdl-core (fast/reliable when not blocked). If it fails (403/decipher/etc), fall back to play-dl.
+        let audioStream;
+        try {
+            const ytdlOptions = {
+                filter: 'audioonly',
+                quality: 'highestaudio',
+                highWaterMark: 1 << 25,
+                liveBuffer: 1 << 25
+            };
+
+            if (queue.ytdlCookie && typeof queue.ytdlCookie === 'string' && queue.ytdlCookie.trim()) {
+                ytdlOptions.requestOptions = {
+                    headers: {
+                        cookie: queue.ytdlCookie.trim()
+                    }
+                };
+            }
+
+            audioStream = ytdl(song.url, ytdlOptions);
+        } catch (primaryErr) {
+            console.warn('[MUSIC] ytdl-core stream failed, falling back to play-dl:', primaryErr);
+            const streamInfo = await play.stream(song.url);
+            audioStream = streamInfo.stream;
+        }
 
         // Probe stream type so discord.js voice decodes it correctly
         const probed = await demuxProbe(audioStream);
@@ -114,19 +131,18 @@ async function playSong(guild, queue) {
 
         console.log(`[MUSIC] Starting player, current state: ${queue.player.state.status}`);
         queue.player.play(resource);
-        console.log(`[MUSIC] Player.play() called, new state: ${queue.player.state.status}`);
-
-        queue.player.once(AudioPlayerStatus.Idle, () => {
-            console.log(`[MUSIC] Player became idle, loopMode: ${queue.loopMode}`);
-            if (queue.loopMode && queue.current) {
-                const { title, url, duration, thumbnail, requestedBy } = queue.current;
-                queue.songs.unshift({ title, url, duration, thumbnail, requestedBy });
-            }
-            playSong(guild, queue);
-        });
+        await entersState(queue.player, AudioPlayerStatus.Playing, 10_000);
+        console.log(`[MUSIC] Player is now playing: ${queue.player.state.status}`);
+        return true;
     } catch (error) {
+        queue.lastError = error;
         console.error('Error playing song:', error);
-        playSong(guild, queue);
+        // If another song is queued, try it. Otherwise clear current.
+        queue.current = null;
+        if (queue.songs.length > 0) {
+            return playSong(guild, queue);
+        }
+        return false;
     }
 }
 
@@ -267,6 +283,7 @@ module.exports = {
             }
 
             const queue = getQueue(interaction.guild.id);
+            queue.lastError = null;
 
             // Join voice channel if not already connected
             if (!queue.connection) {
@@ -322,11 +339,25 @@ module.exports = {
                     console.error('Stage/voice state check failed:', stageErr);
                 }
 
-                // Attach a single error listener to the player
-                queue.player.on('error', error => {
-                    console.error('Audio player error:', error);
-                    playSong(interaction.guild, queue);
-                });
+                // Attach listeners only once per guild queue
+                if (!queue._eventsAttached) {
+                    queue._eventsAttached = true;
+
+                    queue.player.on(AudioPlayerStatus.Idle, () => {
+                        console.log(`[MUSIC] Player became idle, loopMode: ${queue.loopMode}`);
+                        if (queue.loopMode && queue.current) {
+                            const { title, url, duration, thumbnail, requestedBy } = queue.current;
+                            queue.songs.unshift({ title, url, duration, thumbnail, requestedBy });
+                        }
+                        playSong(interaction.guild, queue);
+                    });
+
+                    queue.player.on('error', error => {
+                        queue.lastError = error;
+                        console.error('Audio player error:', error);
+                        playSong(interaction.guild, queue);
+                    });
+                }
 
                 queue.connection.on(VoiceConnectionStatus.Disconnected, async () => {
                     try {
@@ -343,13 +374,25 @@ module.exports = {
             // Add to queue or play immediately
             if (!queue.player || queue.player.state.status === AudioPlayerStatus.Idle) {
                 queue.songs.push(song);
-                await playSong(interaction.guild, queue);
 
-                const embed = successEmbed('🎵 Now Playing', `[${song.title}](${song.url})`)
-                    .setThumbnail(song.thumbnail)
+                const started = await playSong(interaction.guild, queue);
+                if (!started) {
+                    const msg = queue.lastError?.message || 'Unknown error while starting playback.';
+                    const hint = /sign in|confirm your age|private video|unavailable|premieres/i.test(msg)
+                        ? '\n\nThis can be caused by **YouTube restrictions** (age/region/login). Try another video URL.'
+                        : '';
+
+                    return interaction.followUp({
+                        embeds: [errorEmbed('Playback Failed', `${msg}${hint}`)]
+                    });
+                }
+
+                const playing = queue.current || song;
+                const embed = successEmbed('🎵 Now Playing', `[${playing.title}](${playing.url})`)
+                    .setThumbnail(playing.thumbnail)
                     .addFields(
-                        { name: 'Duration', value: formatDuration(song.duration), inline: true },
-                        { name: 'Requested by', value: song.requestedBy.toString(), inline: true }
+                        { name: 'Duration', value: formatDuration(playing.duration || 0), inline: true },
+                        { name: 'Requested by', value: playing.requestedBy.toString(), inline: true }
                     );
 
                 await interaction.followUp({ embeds: [embed] });
