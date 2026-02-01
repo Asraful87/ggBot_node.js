@@ -109,6 +109,12 @@ function guessTitleFromUrl(url) {
     }
 }
 
+function normalizeSourceChoice(value) {
+    const v = (value || '').toString().trim().toLowerCase();
+    if (v === 'youtube' || v === 'soundcloud' || v === 'auto') return v;
+    return 'auto';
+}
+
 async function playSong(guild, queue) {
     if (queue.songs.length === 0) {
         queue.current = null;
@@ -247,7 +253,16 @@ module.exports = {
         .addStringOption(option =>
             option.setName('query')
                 .setDescription('Song name or URL (YouTube/SoundCloud/MP3/Radio)')
-                .setRequired(true)),
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('source')
+                .setDescription('Where to search (recommended: SoundCloud on Heroku)')
+                .addChoices(
+                    { name: 'Auto (YouTube → SoundCloud)', value: 'auto' },
+                    { name: 'YouTube only', value: 'youtube' },
+                    { name: 'SoundCloud only', value: 'soundcloud' }
+                )
+                .setRequired(false)),
 
     async execute(interaction, bot) {
         // Defer reply immediately to avoid timeout
@@ -256,6 +271,9 @@ module.exports = {
         let stage = 'init';
 
         const query = interaction.options.getString('query');
+        const sourceChoice = normalizeSourceChoice(
+            interaction.options.getString('source') || process.env.MUSIC_DEFAULT_SOURCE || 'auto'
+        );
         const member = interaction.member;
         const voiceChannel = member.voice.channel;
 
@@ -338,24 +356,21 @@ module.exports = {
                     source: 'direct'
                 };
             } else {
-                // Search: try YouTube first, then fall back to SoundCloud for a smoother “free” experience on Heroku.
+                // Search:
+                // - soundcloud: SoundCloud search only (best reliability on Heroku)
+                // - youtube: YouTube search only
+                // - auto: YouTube first, then SoundCloud fallback if blocked / no results
                 try {
                     stage = 'search';
-                    console.log('[SEARCH] Searching YouTube for:', query);
-                    let yt_info;
-                    try {
-                        yt_info = await searchYouTube(query);
-                    } catch (ytErr) {
-                        const ytMsg = ytErr && (ytErr.message || String(ytErr));
-                        const blocked = /sign in|confirm you\W*re not a bot|captcha|verify you are not a robot/i.test(ytMsg);
-                        if (!blocked) throw ytErr;
-                        console.warn('[SEARCH] YouTube search blocked; trying SoundCloud search');
-
+                    if (sourceChoice === 'soundcloud') {
+                        console.log('[SEARCH] Searching SoundCloud for:', query);
                         const sc = await searchSoundCloud(query);
                         const item = sc && sc[0];
                         const scUrl = item && (item.url || item.link);
                         if (!isLikelyUrl(scUrl)) {
-                            throw ytErr;
+                            return interaction.followUp({
+                                embeds: [errorEmbed('Error', 'No SoundCloud results found. Try a direct URL instead.')]
+                            });
                         }
 
                         song = {
@@ -366,40 +381,89 @@ module.exports = {
                             requestedBy: interaction.user,
                             source: 'soundcloud'
                         };
-                    }
-
-                    if (song) {
-                        // already set by SoundCloud fallback
                     } else {
-                        if (!yt_info || yt_info.length === 0) {
-                            return interaction.followUp({
-                                embeds: [errorEmbed('Error', 'No results found! Try a YouTube/SoundCloud URL instead.')]
-                            });
-                        }
-                        const video = yt_info[0];
-                        console.log('[SEARCH] Found video:', video.title);
+                        console.log('[SEARCH] Searching YouTube for:', query);
+                        let yt_info;
+                        try {
+                            yt_info = await searchYouTube(query);
+                        } catch (ytErr) {
+                            if (sourceChoice === 'youtube') throw ytErr;
 
-                        const videoUrl = normalizeYoutubeUrl(video);
-                        if (!videoUrl) {
-                            console.error('Search returned video without URL:', video);
-                            return interaction.followUp({
-                                embeds: [errorEmbed('Error', 'Found a video but couldn\'t get its URL. Try a direct YouTube link.')]
-                            });
+                            const ytMsg = ytErr && (ytErr.message || String(ytErr));
+                            const blocked = /sign in|confirm you\W*re not a bot|captcha|verify you are not a robot/i.test(ytMsg);
+                            if (!blocked) throw ytErr;
+                            console.warn('[SEARCH] YouTube search blocked; trying SoundCloud search');
+
+                            const sc = await searchSoundCloud(query);
+                            const item = sc && sc[0];
+                            const scUrl = item && (item.url || item.link);
+                            if (!isLikelyUrl(scUrl)) {
+                                throw ytErr;
+                            }
+
+                            song = {
+                                title: item.name || item.title || 'SoundCloud Track',
+                                url: scUrl,
+                                duration: item.durationInSec || item.duration || 0,
+                                thumbnail: item.thumbnails?.[0]?.url || item.thumbnail || 'https://via.placeholder.com/150',
+                                requestedBy: interaction.user,
+                                source: 'soundcloud'
+                            };
                         }
 
-                        song = {
-                            title: video.title || 'Unknown Title',
-                            url: videoUrl,
-                            duration: video.durationInSec || 0,
-                            thumbnail: video.thumbnails?.[0]?.url || 'https://via.placeholder.com/150',
-                            requestedBy: interaction.user,
-                            source: 'youtube'
-                        };
+                        if (!song) {
+                            if (!yt_info || yt_info.length === 0) {
+                                if (sourceChoice === 'auto') {
+                                    console.warn('[SEARCH] No YouTube results; trying SoundCloud search');
+                                    const sc = await searchSoundCloud(query);
+                                    const item = sc && sc[0];
+                                    const scUrl = item && (item.url || item.link);
+                                    if (isLikelyUrl(scUrl)) {
+                                        song = {
+                                            title: item.name || item.title || 'SoundCloud Track',
+                                            url: scUrl,
+                                            duration: item.durationInSec || item.duration || 0,
+                                            thumbnail: item.thumbnails?.[0]?.url || item.thumbnail || 'https://via.placeholder.com/150',
+                                            requestedBy: interaction.user,
+                                            source: 'soundcloud'
+                                        };
+                                    }
+                                }
+
+                                if (!song) {
+                                    return interaction.followUp({
+                                        embeds: [errorEmbed('Error', 'No results found! Try a YouTube/SoundCloud URL instead.')]
+                                    });
+                                }
+                            }
+
+                            if (!song) {
+                                const video = yt_info[0];
+                                console.log('[SEARCH] Found video:', video.title);
+
+                                const videoUrl = normalizeYoutubeUrl(video);
+                                if (!videoUrl) {
+                                    console.error('Search returned video without URL:', video);
+                                    return interaction.followUp({
+                                        embeds: [errorEmbed('Error', 'Found a video but couldn\'t get its URL. Try a direct YouTube link.')]
+                                    });
+                                }
+
+                                song = {
+                                    title: video.title || 'Unknown Title',
+                                    url: videoUrl,
+                                    duration: video.durationInSec || 0,
+                                    thumbnail: video.thumbnails?.[0]?.url || 'https://via.placeholder.com/150',
+                                    requestedBy: interaction.user,
+                                    source: 'youtube'
+                                };
+                            }
+                        }
                     }
                 } catch (searchError) {
-                    console.error('YouTube search error:', searchError);
+                    console.error('Search error:', searchError);
                     return interaction.followUp({
-                        embeds: [errorEmbed('Error', `Search failed. Try a direct URL (SoundCloud, MP3, radio stream) or a different query.\n\nDetails: ${searchError.message || searchError}`)]
+                        embeds: [errorEmbed('Error', `Search failed. Try "/play source:soundcloud" or a direct URL (SoundCloud/MP3/radio).\n\nDetails: ${searchError.message || searchError}`)]
                     });
                 }
             }
