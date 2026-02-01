@@ -1,7 +1,7 @@
 // Load encryption library FIRST before discord.js voice
 require('./utils/sodium');
 
-const { Client, GatewayIntentBits, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, REST, Routes } = require('discord.js');
 const { readdirSync } = require('fs');
 const { join } = require('path');
 const yaml = require('js-yaml');
@@ -128,6 +128,58 @@ class ModBot extends Client {
 
 const bot = new ModBot();
 
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function withTimeout(promise, ms, label) {
+    const timeout = sleep(ms).then(() => {
+        throw new Error(`${label ?? 'Operation'} timed out after ${ms}ms`);
+    });
+    return Promise.race([promise, timeout]);
+}
+
+async function syncSlashCommands({ guildId }) {
+    const token = process.env.DISCORD_TOKEN;
+    if (!token) {
+        throw new Error('DISCORD_TOKEN is not set; cannot sync slash commands.');
+    }
+
+    const commands = Array.from(bot.commands.values())
+        .map(cmd => cmd.data?.toJSON?.() ?? cmd.data)
+        .filter(Boolean);
+
+    const scopeLabel = guildId ? `guild ${guildId}` : 'globally';
+    logger.info(`⏳ Syncing ${commands.length} slash commands ${guildId ? 'to' : ''} ${scopeLabel}...`);
+
+    const rest = new REST({ version: '10' }).setToken(token);
+    const applicationId = bot.user?.id;
+    if (!applicationId) {
+        throw new Error('Bot user id is not available; cannot build application command routes.');
+    }
+
+    const route = guildId
+        ? Routes.applicationGuildCommands(applicationId, guildId)
+        : Routes.applicationCommands(applicationId);
+
+    await withTimeout(
+        rest.put(route, { body: commands }),
+        20000,
+        `Slash command sync (${scopeLabel})`
+    );
+
+    logger.info(`✅ Synced ${commands.length} slash commands ${guildId ? 'to guild ' + guildId : 'globally'}`);
+
+    // Extra verification in logs: fetch registered command names from API.
+    try {
+        const fetched = await withTimeout(rest.get(route), 20000, `Slash command fetch (${scopeLabel})`);
+        const names = Array.isArray(fetched) ? fetched.map(c => c?.name).filter(Boolean) : [];
+        logger.info(`ℹ️ Registered commands in ${scopeLabel}: ${names.length ? names.join(', ') : '(none)'}`);
+    } catch (err) {
+        logger.warn('Could not fetch registered command list after sync:', err);
+    }
+}
+
 bot.once('ready', async () => {
     if (!bot.synced) {
         const guildId = process.env.GUILD_ID;
@@ -143,12 +195,8 @@ bot.once('ready', async () => {
                     } catch (err) {
                         logger.error('Failed to fetch members:', err);
                     }
-                    
-                    const commands = Array.from(bot.commands.values()).map(cmd => cmd.data?.toJSON?.() ?? cmd.data);
-                    logger.info(`⏳ Syncing ${commands.length} slash commands to guild ${guildId}...`);
-                    guild.commands.set(commands)
-                        .then(() => logger.info(`✅ Guild-synced ${commands.length} slash commands to guild ${guildId}`))
-                        .catch((error) => logger.error('Failed to guild-sync commands:', error));
+
+                    await syncSlashCommands({ guildId });
                 } else {
                     logger.warn(`GUILD_ID is set (${guildId}) but the bot is not in that guild (or it is not cached yet).`);
                 }
@@ -163,14 +211,7 @@ bot.once('ready', async () => {
                     }
                 }
 
-                const commands = Array.from(bot.commands.values()).map(cmd => cmd.data?.toJSON?.() ?? cmd.data);
-                logger.info(`⏳ Syncing ${commands.length} slash commands globally...`);
-                bot.application.commands.set(commands)
-                    .then(() => {
-                        logger.info(`✅ Globally synced ${commands.length} slash commands`);
-                        logger.info('ℹ️ Global command updates can take up to ~1 hour to appear everywhere. For instant updates in one server, set GUILD_ID and restart the bot.');
-                    })
-                    .catch((error) => logger.error('Failed to global-sync commands:', error));
+                await syncSlashCommands({ guildId: null });
                 logger.info('ℹ️ Global command updates can take up to ~1 hour to appear everywhere. For instant updates in one server, set GUILD_ID and restart the bot.');
             }
             bot.synced = true;
