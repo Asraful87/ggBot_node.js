@@ -3,6 +3,68 @@ const fs = require('fs');
 const yaml = require('js-yaml');
 const path = require('path');
 
+const DEFAULT_CONFIG = {
+    automod: {
+        enabled: false,
+        action_on_violation: 'warn',
+        max_mentions: 5,
+        block_discord_invites: true,
+        block_links: false,
+        blocked_words: []
+    },
+    antispam: {
+        enabled: false,
+        max_messages: 6,
+        per_seconds: 8,
+        spam_action: 'timeout'
+    }
+};
+
+function loadConfig(configPath, bot) {
+    try {
+        if (fs.existsSync(configPath)) {
+            const parsed = yaml.load(fs.readFileSync(configPath, 'utf8')) || {};
+            return parsed;
+        }
+    } catch (e) {
+        // fall through to defaults
+    }
+
+    // If the main bot already loaded config into memory, use it as a base.
+    if (bot && bot.config && typeof bot.config === 'object') {
+        return bot.config;
+    }
+
+    return { ...DEFAULT_CONFIG };
+}
+
+function ensureAutomodShape(config) {
+    if (!config || typeof config !== 'object') config = {};
+
+    if (!config.automod || typeof config.automod !== 'object') config.automod = {};
+    if (!config.antispam || typeof config.antispam !== 'object') config.antispam = {};
+
+    config.automod.enabled = Boolean(config.automod.enabled);
+    config.automod.action_on_violation = config.automod.action_on_violation || DEFAULT_CONFIG.automod.action_on_violation;
+    config.automod.max_mentions = Number.isFinite(Number(config.automod.max_mentions)) ? Number(config.automod.max_mentions) : DEFAULT_CONFIG.automod.max_mentions;
+    config.automod.block_discord_invites = config.automod.block_discord_invites !== undefined ? Boolean(config.automod.block_discord_invites) : DEFAULT_CONFIG.automod.block_discord_invites;
+    config.automod.block_links = config.automod.block_links !== undefined ? Boolean(config.automod.block_links) : DEFAULT_CONFIG.automod.block_links;
+    if (!Array.isArray(config.automod.blocked_words)) config.automod.blocked_words = [];
+
+    config.antispam.enabled = Boolean(config.antispam.enabled);
+    config.antispam.max_messages = Number.isFinite(Number(config.antispam.max_messages)) ? Number(config.antispam.max_messages) : DEFAULT_CONFIG.antispam.max_messages;
+    config.antispam.per_seconds = Number.isFinite(Number(config.antispam.per_seconds)) ? Number(config.antispam.per_seconds) : DEFAULT_CONFIG.antispam.per_seconds;
+    config.antispam.spam_action = config.antispam.spam_action || DEFAULT_CONFIG.antispam.spam_action;
+
+    return config;
+}
+
+function saveConfig(configPath, config) {
+    const dir = path.dirname(configPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(configPath, yaml.dump(config), 'utf8');
+}
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('setup_automod')
@@ -37,16 +99,25 @@ module.exports = {
                         .setRequired(true)))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
-    async execute(interaction) {
+    async execute(interaction, bot) {
         const subcommand = interaction.options.getSubcommand();
         const configPath = path.join(__dirname, '../../config.yaml');
-        const config = yaml.load(fs.readFileSync(configPath, 'utf8'));
+        let config = ensureAutomodShape(loadConfig(configPath, bot));
 
         if (subcommand === 'toggle') {
             const enabled = interaction.options.getBoolean('enabled');
             config.automod.enabled = enabled;
             
-            fs.writeFileSync(configPath, yaml.dump(config));
+            try {
+                saveConfig(configPath, config);
+            } catch (e) {
+                console.error('Failed to save config.yaml:', e);
+            }
+
+            if (bot && bot.config) {
+                bot.config.automod = config.automod;
+                bot.config.antispam = config.antispam;
+            }
             
             const embed = new EmbedBuilder()
                 .setColor(enabled ? 0x00ff00 : 0xff0000)
@@ -84,7 +155,16 @@ module.exports = {
             
             if (!config.automod.blocked_words.includes(word)) {
                 config.automod.blocked_words.push(word);
-                fs.writeFileSync(configPath, yaml.dump(config));
+                try {
+                    saveConfig(configPath, config);
+                } catch (e) {
+                    console.error('Failed to save config.yaml:', e);
+                }
+
+                if (bot && bot.config) {
+                    bot.config.automod = config.automod;
+                    bot.config.antispam = config.antispam;
+                }
                 
                 const embed = new EmbedBuilder()
                     .setColor(0x00ff00)
@@ -103,11 +183,20 @@ module.exports = {
             
             if (index > -1) {
                 config.automod.blocked_words.splice(index, 1);
-                fs.writeFileSync(configPath, yaml.dump(config));
+                try {
+                    saveConfig(configPath, config);
+                } catch (e) {
+                    console.error('Failed to save config.yaml:', e);
+                }
+
+                if (bot && bot.config) {
+                    bot.config.automod = config.automod;
+                    bot.config.antispam = config.antispam;
+                }
                 
                 const embed = new EmbedBuilder()
                     .setColor(0x00ff00)
-                    .setTitle('✅ok Word Removed')
+                    .setTitle('✅ Word Removed')
                     .setDescription(`Removed \`${word}\` from blocked words list`)
                     .setTimestamp();
                 
