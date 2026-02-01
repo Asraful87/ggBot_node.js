@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "Discord moderation bot with music, tickets, and auto-moderation features",
   "main": "bot.js",
+  "engines": {
+    "node": "20.x",
+    "npm": "10.x"
+  },
   "scripts": {
     "start": "node bot.js",
     "dev": "nodemon bot.js"
