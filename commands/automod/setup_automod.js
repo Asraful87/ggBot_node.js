@@ -107,7 +107,7 @@ module.exports = {
                 
                 const embed = new EmbedBuilder()
                     .setColor(0x00ff00)
-                    .setTitle('✅ Word Removed')
+                    .setTitle('✅ok Word Removed')
                     .setDescription(`Removed \`${word}\` from blocked words list`)
                     .setTimestamp();
                 
