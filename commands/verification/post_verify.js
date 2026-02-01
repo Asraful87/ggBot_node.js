@@ -8,9 +8,19 @@ const path = require('path');
 let config;
 try {
     const configPath = path.join(__dirname, '../../config.yaml');
-    config = yaml.load(fs.readFileSync(configPath, 'utf8'));
+    if (fs.existsSync(configPath)) {
+        config = yaml.load(fs.readFileSync(configPath, 'utf8'));
+    } else {
+        config = {
+            verification: {
+                role_name: 'Verified',
+                panel_title: '✅ Verification',
+                panel_description: 'Click **Verify** to unlock the server.'
+            }
+        };
+    }
 } catch (e) {
-    console.error('Failed to load config.yaml:', e);
+    console.error('Failed to load config.yaml:', e?.message || String(e));
     config = {
         verification: {
             role_name: 'Verified',

@@ -580,6 +580,53 @@ module.exports = {
                 if (!started) {
                     const msg = queue.lastError?.message || 'Unknown error while starting playback.';
                     const needsAuth = /sign in|confirm you\W*re not a bot|captcha|verify you are not a robot|confirm your age|private video|unavailable|premieres/i.test(msg);
+
+                    // If YouTube is blocked on the hosting environment, auto-fallback to SoundCloud for search queries.
+                    // This helps on Heroku where YouTube frequently triggers CAPTCHA.
+                    const canAutoFallback =
+                        needsAuth &&
+                        sourceChoice === 'auto' &&
+                        !isLikelyUrl(query) &&
+                        song?.source === 'youtube';
+
+                    if (canAutoFallback) {
+                        try {
+                            stage = 'fallback_soundcloud';
+                            console.warn('[MUSIC] YouTube playback blocked; retrying via SoundCloud');
+
+                            const sc = await searchSoundCloud(query);
+                            const item = sc && sc[0];
+                            const scUrl = item && (item.url || item.link);
+
+                            if (isLikelyUrl(scUrl)) {
+                                const scSong = {
+                                    title: item.name || item.title || 'SoundCloud Track',
+                                    url: scUrl,
+                                    duration: item.durationInSec || item.duration || 0,
+                                    thumbnail: item.thumbnails?.[0]?.url || item.thumbnail || 'https://via.placeholder.com/150',
+                                    requestedBy: interaction.user,
+                                    source: 'soundcloud'
+                                };
+
+                                queue.songs.push(scSong);
+                                const startedSc = await playSong(interaction.guild, queue);
+                                if (startedSc) {
+                                    const playing = queue.current || scSong;
+                                    const embed = successEmbed('🎵 Now Playing (SoundCloud)', `[${playing.title}](${playing.url})`)
+                                        .setThumbnail(playing.thumbnail)
+                                        .addFields(
+                                            { name: 'Duration', value: formatDuration(playing.duration || 0), inline: true },
+                                            { name: 'Requested by', value: playing.requestedBy.toString(), inline: true }
+                                        );
+
+                                    return interaction.followUp({ embeds: [embed] });
+                                }
+                            }
+                        } catch (fallbackErr) {
+                            console.error('SoundCloud fallback failed:', fallbackErr);
+                        }
+                    }
+
                     const hint = needsAuth
                         ? '\n\nYouTube is blocking this request (age/region/login/CAPTCHA). Free & smoother options: try **SoundCloud** or a **direct MP3/radio URL**. If you still want YouTube on Heroku, set `YOUTUBE_COOKIE` in Config Vars.'
                         : '';

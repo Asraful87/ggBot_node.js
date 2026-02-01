@@ -8,9 +8,13 @@ const path = require('path');
 let config;
 try {
     const configPath = path.join(__dirname, '../../config.yaml');
-    config = yaml.load(fs.readFileSync(configPath, 'utf8'));
+    if (fs.existsSync(configPath)) {
+        config = yaml.load(fs.readFileSync(configPath, 'utf8'));
+    } else {
+        config = { tickets: {} };
+    }
 } catch (e) {
-    console.error('Failed to load config.yaml:', e);
+    console.error('Failed to load config.yaml:', e?.message || String(e));
     config = { tickets: {} };
 }
 

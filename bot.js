@@ -134,7 +134,7 @@ bot.once('ready', async () => {
         
         try {
             if (guildId) {
-                const guild = bot.guilds.cache.get(guildId);
+                const guild = bot.guilds.cache.get(guildId) || (await bot.guilds.fetch(guildId).catch(() => null));
                 if (guild) {
                     // Fetch all guild members to populate cache for autocomplete
                     try {
@@ -144,7 +144,7 @@ bot.once('ready', async () => {
                         logger.error('Failed to fetch members:', err);
                     }
                     
-                    const commands = Array.from(bot.commands.values()).map(cmd => cmd.data);
+                    const commands = Array.from(bot.commands.values()).map(cmd => cmd.data?.toJSON?.() ?? cmd.data);
                     await guild.commands.set(commands);
                     logger.info(`✅ Guild-synced ${commands.length} slash commands to guild ${guildId}`);
                 } else {
@@ -161,7 +161,7 @@ bot.once('ready', async () => {
                     }
                 }
 
-                const commands = Array.from(bot.commands.values()).map(cmd => cmd.data);
+                const commands = Array.from(bot.commands.values()).map(cmd => cmd.data?.toJSON?.() ?? cmd.data);
                 await bot.application.commands.set(commands);
                 logger.info(`✅ Globally synced ${commands.length} slash commands`);
                 logger.info('ℹ️ Global command updates can take up to ~1 hour to appear everywhere. For instant updates in one server, set GUILD_ID and restart the bot.');
