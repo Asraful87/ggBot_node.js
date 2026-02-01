@@ -28,3 +28,6 @@ __pycache__/
 
 # VS Code settings
 .vscode/
+
+# Nested Heroku sample app (not part of this repo)
+nodejs-getting-started/
