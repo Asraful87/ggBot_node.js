@@ -215,23 +215,52 @@ async function syncSlashCommands({ guildId }) {
 
 bot.once('ready', async () => {
     if (!bot.synced) {
-        const guildId = process.env.GUILD_ID;
+        // Prefer environment variables for deployment, but allow config.yaml for local convenience.
+        // Supports:
+        // - GUILD_ID="123" (single guild)
+        // - GUILD_IDS="123,456" (multiple guilds)
+        // - config.yaml -> bot.guild_id (fallback)
+        const configuredGuildIdsRaw =
+            process.env.GUILD_IDS ||
+            process.env.GUILD_ID ||
+            bot.config?.bot?.guild_id ||
+            bot.config?.bot?.guildId;
+
+        const configuredGuildIds = (typeof configuredGuildIdsRaw === 'string' ? configuredGuildIdsRaw : String(configuredGuildIdsRaw || ''))
+            .split(/[\s,]+/)
+            .map(s => s.trim())
+            .filter(Boolean);
         
         try {
-            if (guildId) {
-                const guild = bot.guilds.cache.get(guildId) || (await bot.guilds.fetch(guildId).catch(() => null));
-                if (guild) {
+            logger.info(`ℹ️ Loaded ${bot.commands.size} command module(s) from disk`);
+
+            if (configuredGuildIds.length > 0) {
+                let syncedAnyGuild = false;
+
+                for (const guildId of configuredGuildIds) {
+                    const guild = bot.guilds.cache.get(guildId) || (await bot.guilds.fetch(guildId).catch(() => null));
+                    if (!guild) {
+                        logger.warn(`GUILD_ID/GUILD_IDS includes ${guildId}, but the bot is not in that guild (or cannot fetch it).`);
+                        continue;
+                    }
+
                     // Fetch all guild members to populate cache for autocomplete
                     try {
                         await guild.members.fetch();
-                        logger.info(`✅ Fetched ${guild.members.cache.size} members for autocomplete`);
+                        logger.info(`✅ Fetched ${guild.members.cache.size} members for autocomplete in ${guild.name}`);
                     } catch (err) {
-                        logger.error('Failed to fetch members:', err);
+                        logger.error(`Failed to fetch members for ${guild.name}:`, err);
                     }
 
                     await syncSlashCommands({ guildId });
-                } else {
-                    logger.warn(`GUILD_ID is set (${guildId}) but the bot is not in that guild (or it is not cached yet).`);
+                    syncedAnyGuild = true;
+                }
+
+                // If the configured guild id(s) were invalid, fall back to global so the bot still gets commands.
+                if (!syncedAnyGuild) {
+                    logger.warn('No configured guild ids were usable; falling back to global slash command sync. Remove/fix GUILD_ID or GUILD_IDS to avoid this.');
+                    await syncSlashCommands({ guildId: null });
+                    logger.info('ℹ️ Global command updates can take up to ~1 hour to appear everywhere. For instant updates in one server, set a valid GUILD_ID (or GUILD_IDS) and restart the bot.');
                 }
             } else {
                 // Fetch members for all guilds
